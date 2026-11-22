@@ -1,4 +1,4 @@
-# Pearl Vault — Публикация на GitHub и первый релиз (Windows & Linux)
+# Pearl Vault - Публикация на GitHub и первый релиз (Windows & Linux)
 
 ## 1. Инициализация и выгрузка на GitHub
 ```bash
