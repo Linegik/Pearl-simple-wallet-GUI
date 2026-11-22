@@ -1,0 +1,6 @@
+{
+  "name": "Pearl Vault — Кошелек Pearl для Windows",
+  "description": "Безопасный графический кошелек Pearl с открытым исходным кодом для Windows: холодное хранение, тестовая сеть Testnet, локальное шифрование ключей и автообновление через GitHub API с проверкой цифровой подписи.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
