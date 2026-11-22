@@ -1,18 +1,24 @@
 import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  Copy,
   Download,
   ExternalLink,
   FileCheck,
+  Link2,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  Terminal,
 } from 'lucide-react';
 import {
+  buildOneLineInstallCommand,
   createSignedReleaseManifest,
   DesktopTargetPlatform,
   GitHubRelease,
+  isSafeHttpsUrl,
   isUpdateAvailable,
   isValidGithubRepoSlug,
   normalizeAssetDigest,
@@ -37,6 +43,12 @@ interface UpdaterViewProps {
   onCheckReleases: (force?: boolean, repo?: string) => Promise<void>;
 }
 
+const PLATFORM_OPTIONS: Array<{ id: DesktopTargetPlatform; label: string }> = [
+  { id: 'windows', label: 'Windows (x64)' },
+  { id: 'ubuntu', label: 'Ubuntu (.deb)' },
+  { id: 'linux', label: 'Linux (AppImage / tar.gz)' },
+];
+
 export function UpdaterView({
   settings,
   onUpdateSettings,
@@ -60,6 +72,18 @@ export function UpdaterView({
     matchesOfficial: boolean;
   } | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [copiedCmd, setCopiedCmd] = useState(false);
+
+  const customLinks = settings.customInstallerLinks ?? {
+    windowsUrl: '',
+    ubuntuUrl: '',
+    linuxUrl: '',
+  };
+
+  const [winUrlInput, setWinUrlInput] = useState(customLinks.windowsUrl);
+  const [ubuntuUrlInput, setUbuntuUrlInput] = useState(customLinks.ubuntuUrl);
+  const [linuxUrlInput, setLinuxUrlInput] = useState(customLinks.linuxUrl);
+  const [linksSavedMsg, setLinksSavedMsg] = useState<string | null>(null);
 
   const filteredReleases = releases.filter((r) => settings.includePrerelease || !r.prerelease);
   const latestRelease = filteredReleases[0] ?? null;
@@ -67,6 +91,25 @@ export function UpdaterView({
     filteredReleases.find((r) => r.tag_name === selectedTag) ?? latestRelease ?? null;
 
   const targetAsset = selectReleaseAssetForPlatform(activeRelease, targetPlatform);
+
+  const customUrlForPlatform =
+    targetPlatform === 'windows'
+      ? customLinks.windowsUrl
+      : targetPlatform === 'ubuntu'
+        ? customLinks.ubuntuUrl
+        : customLinks.linuxUrl;
+
+  const effectiveDownloadUrl = isSafeHttpsUrl(customUrlForPlatform)
+    ? customUrlForPlatform.trim()
+    : targetAsset?.browser_download_url ?? '';
+
+  const effectiveFilename = isSafeHttpsUrl(customUrlForPlatform)
+    ? customUrlForPlatform.trim().split('/').pop()?.split('?')[0]
+    : targetAsset?.name;
+
+  const oneLineCommand = effectiveDownloadUrl
+    ? buildOneLineInstallCommand(targetPlatform, effectiveDownloadUrl, effectiveFilename)
+    : '';
 
   const hasUpdate = latestRelease
     ? isUpdateAvailable(settings.installedVersion, latestRelease.tag_name)
@@ -85,6 +128,32 @@ export function UpdaterView({
     setSigReport(null);
     setChecksumMatched(null);
     void onCheckReleases(true, repoInput.trim());
+  };
+
+  const handleSaveCustomLinks = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLinksSavedMsg(null);
+    onUpdateSettings({
+      ...settings,
+      customInstallerLinks: {
+        windowsUrl: isSafeHttpsUrl(winUrlInput) ? winUrlInput.trim() : '',
+        ubuntuUrl: isSafeHttpsUrl(ubuntuUrlInput) ? ubuntuUrlInput.trim() : '',
+        linuxUrl: isSafeHttpsUrl(linuxUrlInput) ? linuxUrlInput.trim() : '',
+      },
+    });
+    setLinksSavedMsg('Ссылки на установщики сохранены в списке релизов.');
+    setTimeout(() => setLinksSavedMsg(null), 3000);
+  };
+
+  const handleCopyCommand = async () => {
+    if (!oneLineCommand) return;
+    try {
+      await navigator.clipboard.writeText(oneLineCommand);
+      setCopiedCmd(true);
+      setTimeout(() => setCopiedCmd(false), 2500);
+    } catch {
+      // Ignore clipboard failure in headless mode
+    }
   };
 
   const runSignatureAndChecksumVerification = async (tamperMode: boolean) => {
@@ -146,7 +215,7 @@ export function UpdaterView({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-bold text-slate-900">
-            Автообновление через GitHub Releases API
+            Релизы и автообновление (Windows / Ubuntu / Linux)
           </h1>
           <p className="mt-1 text-sm text-slate-600">
             Репозиторий{' '}
@@ -158,42 +227,30 @@ export function UpdaterView({
             >
               {activeRepo}
             </a>{' '}
-            · Сборки для Windows и Linux с проверкой SHA-256 и подписи.
+            · Скачивание установщиков, запуск в 1 команду и проверка подписи.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center rounded-lg border border-slate-200 bg-white p-1">
-            <button
-              type="button"
-              onClick={() => {
-                setTargetPlatform('windows');
-                setSigReport(null);
-                setChecksumMatched(null);
-              }}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                targetPlatform === 'windows'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Windows (x64)
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setTargetPlatform('linux');
-                setSigReport(null);
-                setChecksumMatched(null);
-              }}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                targetPlatform === 'linux'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Linux (x64)
-            </button>
+            {PLATFORM_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  setTargetPlatform(opt.id);
+                  setSigReport(null);
+                  setChecksumMatched(null);
+                }}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                  targetPlatform === opt.id
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
 
           <button
@@ -215,7 +272,13 @@ export function UpdaterView({
       <section className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-white p-5 lg:grid-cols-12">
         <div className="space-y-2 lg:col-span-6">
           <div className="text-xs font-medium text-slate-500">
-            Состояние клиента ({targetPlatform === 'windows' ? 'Windows x64' : 'Linux x64'})
+            Состояние клиента (
+            {targetPlatform === 'windows'
+              ? 'Windows x64'
+              : targetPlatform === 'ubuntu'
+                ? 'Ubuntu / Debian (.deb)'
+                : 'Linux (AppImage / tar.gz)'}
+            )
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-mono text-lg font-bold text-slate-900 tabular-nums">
@@ -315,6 +378,71 @@ export function UpdaterView({
         </div>
       </section>
 
+      {/* Custom Download Links for Ubuntu / Linux / Windows */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <Link2 className="h-4 w-4 text-blue-700" aria-hidden="true" />
+            <span>Добавить прямые ссылки на установщики в релизы (Ubuntu / Linux / Windows)</span>
+          </div>
+          {linksSavedMsg ? (
+            <span className="text-xs font-medium text-emerald-700">{linksSavedMsg}</span>
+          ) : null}
+        </div>
+        <form
+          onSubmit={handleSaveCustomLinks}
+          className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-12"
+        >
+          <div className="md:col-span-3">
+            <label htmlFor="custom-ubuntu-url" className="mb-1 block text-xs font-medium text-slate-700">
+              Ubuntu (.deb) HTTPS URL
+            </label>
+            <input
+              id="custom-ubuntu-url"
+              type="url"
+              value={ubuntuUrlInput}
+              onChange={(e) => setUbuntuUrlInput(e.target.value)}
+              placeholder="https://github.com/.../pearl-vault.deb"
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none"
+            />
+          </div>
+          <div className="md:col-span-4">
+            <label htmlFor="custom-linux-url" className="mb-1 block text-xs font-medium text-slate-700">
+              Linux (.AppImage / .tar.gz) HTTPS URL
+            </label>
+            <input
+              id="custom-linux-url"
+              type="url"
+              value={linuxUrlInput}
+              onChange={(e) => setLinuxUrlInput(e.target.value)}
+              placeholder="https://github.com/.../Pearl-Vault.AppImage"
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none"
+            />
+          </div>
+          <div className="md:col-span-3">
+            <label htmlFor="custom-win-url" className="mb-1 block text-xs font-medium text-slate-700">
+              Windows (.exe / .zip) HTTPS URL
+            </label>
+            <input
+              id="custom-win-url"
+              type="url"
+              value={winUrlInput}
+              onChange={(e) => setWinUrlInput(e.target.value)}
+              placeholder="https://github.com/.../Pearl-Vault-Setup.exe"
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none"
+            />
+          </div>
+          <div className="flex items-end md:col-span-2">
+            <button
+              type="submit"
+              className="w-full rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap"
+            >
+              Сохранить ссылки
+            </button>
+          </div>
+        </form>
+      </section>
+
       {repoError ? (
         <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
           {repoError}
@@ -326,7 +454,12 @@ export function UpdaterView({
         <section className="rounded-xl border border-slate-200 bg-white xl:col-span-6">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
             <h2 className="font-display text-sm font-semibold text-slate-900">
-              Релизы для {targetPlatform === 'windows' ? 'Windows (x64)' : 'Linux (x64)'}
+              Релизы для{' '}
+              {targetPlatform === 'windows'
+                ? 'Windows (x64)'
+                : targetPlatform === 'ubuntu'
+                  ? 'Ubuntu (.deb)'
+                  : 'Linux (AppImage / tar.gz)'}
             </h2>
             <a
               href={`https://github.com/${activeRepo}/releases`}
@@ -343,6 +476,10 @@ export function UpdaterView({
             {filteredReleases.map((rel) => {
               const asset = selectReleaseAssetForPlatform(rel, targetPlatform);
               const isSelected = activeRelease?.tag_name === rel.tag_name;
+              const downloadHref =
+                isSelected && isSafeHttpsUrl(customUrlForPlatform)
+                  ? customUrlForPlatform.trim()
+                  : asset?.browser_download_url;
               return (
                 <div
                   key={rel.tag_name}
@@ -392,11 +529,11 @@ export function UpdaterView({
                           : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
                       }`}
                     >
-                      {isSelected ? 'Выбран' : 'Проверить'}
+                      {isSelected ? 'Выбран' : 'Выбрать'}
                     </button>
-                    {asset ? (
+                    {downloadHref ? (
                       <a
-                        href={asset.browser_download_url}
+                        href={downloadHref}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
@@ -412,165 +549,202 @@ export function UpdaterView({
           </div>
         </section>
 
-        {/* Right: Digital Signature & SHA-256 Verifier */}
-        <section className="rounded-xl border border-slate-200 bg-white p-5 xl:col-span-6">
-          <h2 className="font-display text-base font-semibold text-slate-900">
-            Криптографическая проверка подписи релиза
-          </h2>
-          <p className="mt-1 text-xs text-slate-600">
-            Сверка контрольных сумм <code className="font-mono">checksums.txt</code> с дайджестом
-            GitHub API и проверка цифровой подписи ECDSA-P256-SHA256.
-          </p>
-
-          {activeRelease && targetAsset ? (
-            <div className="mt-4 space-y-4">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5 font-mono text-xs">
-                <div className="text-slate-500">
-                  Пакет ({targetPlatform === 'windows' ? 'Windows' : 'Linux'}): {targetAsset.name}
+        {/* Right: One-Line Launch + Digital Signature & SHA-256 Verifier */}
+        <section className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 xl:col-span-6">
+          {/* One-Command Launch Box */}
+          {oneLineCommand ? (
+            <div className="border-b border-slate-200 pb-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <Terminal className="h-4 w-4 text-blue-700" aria-hidden="true" />
+                  <span>
+                    Запуск в 1 команду (
+                    {targetPlatform === 'windows'
+                      ? 'Windows PowerShell'
+                      : targetPlatform === 'ubuntu'
+                        ? 'Ubuntu / Debian'
+                        : 'Linux'}
+                    )
+                  </span>
                 </div>
-                <div className="mt-1 break-all text-slate-900">
-                  GitHub API SHA-256: {normalizeAssetDigest(targetAsset.digest) ?? 'не указан'}
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2.5">
-                <button
-                  type="button"
-                  disabled={isVerifying}
-                  onClick={() => runSignatureAndChecksumVerification(false)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
-                >
-                  <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-                  <span>Проверить checksums.txt и подпись</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={isVerifying}
-                  onClick={() => runSignatureAndChecksumVerification(true)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-3.5 py-2 text-xs font-semibold text-red-800 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
-                >
-                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-                  <span>Тест подмены (Tamper Test)</span>
-                </button>
-              </div>
-
-              {sigReport ? (
-                <div
-                  role={sigReport.valid ? 'status' : 'alert'}
-                  className={`rounded-lg border p-4 text-xs ${
-                    sigReport.valid
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
-                      : 'border-red-200 bg-red-50 text-red-950'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 font-semibold">
-                    {sigReport.valid ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-700" aria-hidden="true" />
+                <div className="flex items-center gap-2">
+                  <a
+                    href={effectiveDownloadUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Скачать</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleCopyCommand}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                  >
+                    {copiedCmd ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-emerald-700" aria-hidden="true" />
+                        <span>Скопировано</span>
+                      </>
                     ) : (
-                      <ShieldAlert className="h-4 w-4 text-red-700" aria-hidden="true" />
+                      <>
+                        <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Копировать</span>
+                      </>
                     )}
-                    <span>{sigReport.reason}</span>
-                  </div>
-                  <div className="mt-2 space-y-1 font-mono text-[11px] tabular-nums">
-                    <div>
-                      1. Сверка checksums.txt с GitHub Digest:{' '}
-                      {checksumMatched ? 'СОВПАДАЕТ' : 'ОШИБКА'}
-                    </div>
-                    <div>
-                      2. Проверка ЭЦП (ключ {sigReport.signerKeyFingerprint}):{' '}
-                      {sigReport.signatureVerified ? 'ПОДТВЕРЖДЕНА' : 'ОТКЛОНЕНА'}
-                    </div>
-                    <div className="break-all">
-                      3. Ожидаемый SHA-256: {sigReport.expectedSha256}
-                    </div>
-                    <div className="break-all">
-                      4. Проверенный SHA-256: {sigReport.computedSha256}
-                    </div>
-                  </div>
-                  {sigReport.valid && settings.installedVersion !== activeRelease.tag_name ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onUpdateSettings({
-                          ...settings,
-                          installedVersion: activeRelease.tag_name,
-                        })
-                      }
-                      className="mt-3 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-900"
-                    >
-                      Установить подтвержденное обновление {activeRelease.tag_name}
-                    </button>
-                  ) : null}
+                  </button>
                 </div>
-              ) : null}
+              </div>
+              <pre className="mt-2.5 whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100">
+                <code>{oneLineCommand}</code>
+              </pre>
+            </div>
+          ) : null}
 
-              {checksumRaw ? (
-                <details className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
-                  <summary className="cursor-pointer font-semibold text-slate-800">
-                    Содержимое официального checksums.txt ({activeRelease.tag_name})
-                  </summary>
-                  <pre className="mt-2 overflow-x-auto font-mono text-[11px] text-slate-700">
-                    {checksumRaw}
-                  </pre>
-                </details>
-              ) : null}
+          <div>
+            <h2 className="font-display text-base font-semibold text-slate-900">
+              Криптографическая проверка подписи релиза
+            </h2>
+            <p className="mt-1 text-xs text-slate-600">
+              Сверка контрольных сумм <code className="font-mono">checksums.txt</code> с дайджестом
+              GitHub API и проверка цифровой подписи ECDSA-P256-SHA256.
+            </p>
 
-              {signedManifest ? (
-                <details className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
-                  <summary className="cursor-pointer font-semibold text-slate-800">
-                    Подписанный манифест обновления (ECDSA-P256)
-                  </summary>
-                  <pre className="mt-2 overflow-x-auto font-mono text-[11px] text-slate-700">
-                    {JSON.stringify(signedManifest, null, 2)}
-                  </pre>
-                </details>
-              ) : null}
-
-              <div className="border-t border-slate-200 pt-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-xs font-semibold text-slate-900">
-                      Локальная проверка скачанного файла (.exe / .zip / .AppImage / .deb)
-                    </div>
-                    <p className="text-xs text-slate-600">
-                      Хэш вычисляется локально на вашем ПК без загрузки файла в сеть.
-                    </p>
+            {activeRelease && targetAsset ? (
+              <div className="mt-4 space-y-4">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5 font-mono text-xs">
+                  <div className="text-slate-500">Пакет: {targetAsset.name}</div>
+                  <div className="mt-1 break-all text-slate-900">
+                    GitHub API SHA-256: {normalizeAssetDigest(targetAsset.digest) ?? 'не указан'}
                   </div>
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50">
-                    <FileCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Выбрать пакет</span>
-                    <input
-                      type="file"
-                      onChange={handleLocalFileVerify}
-                      className="sr-only"
-                    />
-                  </label>
                 </div>
 
-                {localFileResult ? (
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    disabled={isVerifying}
+                    onClick={() => runSignatureAndChecksumVerification(false)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                    <span>Проверить checksums.txt и подпись</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isVerifying}
+                    onClick={() => runSignatureAndChecksumVerification(true)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-3.5 py-2 text-xs font-semibold text-red-800 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                    <span>Тест подмены (Tamper Test)</span>
+                  </button>
+                </div>
+
+                {sigReport ? (
                   <div
-                    className={`mt-3 rounded-lg border p-3 font-mono text-xs ${
-                      localFileResult.matchesOfficial
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                        : 'border-amber-200 bg-amber-50 text-amber-900'
+                    role={sigReport.valid ? 'status' : 'alert'}
+                    className={`rounded-lg border p-4 text-xs ${
+                      sigReport.valid
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
+                        : 'border-red-200 bg-red-50 text-red-950'
                     }`}
                   >
-                    <div>Файл: {localFileResult.filename}</div>
-                    <div className="mt-1 break-all">SHA-256: {localFileResult.sha256}</div>
-                    <div className="mt-1 font-sans font-semibold">
-                      {localFileResult.matchesOfficial
-                        ? 'Хэш полностью совпадает с официальным релизом GitHub!'
-                        : 'Хэш не совпадает с выбранным релизом.'}
+                    <div className="flex items-center gap-2 font-semibold">
+                      {sigReport.valid ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-700" aria-hidden="true" />
+                      ) : (
+                        <ShieldAlert className="h-4 w-4 text-red-700" aria-hidden="true" />
+                      )}
+                      <span>{sigReport.reason}</span>
                     </div>
+                    <div className="mt-2 space-y-1 font-mono text-[11px] tabular-nums">
+                      <div>
+                        1. Сверка checksums.txt с GitHub Digest:{' '}
+                        {checksumMatched ? 'СОВПАДАЕТ' : 'ОШИБКА'}
+                      </div>
+                      <div>
+                        2. Проверка ЭЦП (ключ {sigReport.signerKeyFingerprint}):{' '}
+                        {sigReport.signatureVerified ? 'ПОДТВЕРЖДЕНА' : 'ОТКЛОНЕНА'}
+                      </div>
+                      <div className="break-all">
+                        3. Ожидаемый SHA-256: {sigReport.expectedSha256}
+                      </div>
+                      <div className="break-all">
+                        4. Проверенный SHA-256: {sigReport.computedSha256}
+                      </div>
+                    </div>
+                    {sigReport.valid && settings.installedVersion !== activeRelease.tag_name ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateSettings({
+                            ...settings,
+                            installedVersion: activeRelease.tag_name,
+                          })
+                        }
+                        className="mt-3 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-900"
+                      >
+                        Установить подтвержденное обновление {activeRelease.tag_name}
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
+
+                {checksumRaw ? (
+                  <details className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                    <summary className="cursor-pointer font-semibold text-slate-800">
+                      Содержимое официального checksums.txt ({activeRelease.tag_name})
+                    </summary>
+                    <pre className="mt-2 overflow-x-auto font-mono text-[11px] text-slate-700">
+                      {checksumRaw}
+                    </pre>
+                  </details>
+                ) : null}
+
+                <div className="border-t border-slate-200 pt-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold text-slate-900">
+                        Локальная проверка скачанного файла (.exe / .deb / .AppImage / .zip)
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        Хэш вычисляется локально на вашем ПК без загрузки файла в сеть.
+                      </p>
+                    </div>
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50">
+                      <FileCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Выбрать пакет</span>
+                      <input type="file" onChange={handleLocalFileVerify} className="sr-only" />
+                    </label>
+                  </div>
+
+                  {localFileResult ? (
+                    <div
+                      className={`mt-3 rounded-lg border p-3 font-mono text-xs ${
+                        localFileResult.matchesOfficial
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                          : 'border-amber-200 bg-amber-50 text-amber-900'
+                      }`}
+                    >
+                      <div>Файл: {localFileResult.filename}</div>
+                      <div className="mt-1 break-all">SHA-256: {localFileResult.sha256}</div>
+                      <div className="mt-1 font-sans font-semibold">
+                        {localFileResult.matchesOfficial
+                          ? 'Хэш полностью совпадает с официальным релизом GitHub!'
+                          : 'Хэш не совпадает с выбранным релизом.'}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="mt-4 text-sm text-slate-500">
-              Загрузка или выбор пакета для {targetPlatform === 'windows' ? 'Windows' : 'Linux'}...
-            </div>
-          )}
+            ) : (
+              <div className="mt-4 text-sm text-slate-500">
+                Пакет для выбранной платформы отсутствует в этом релизе — укажите свою прямую
+                ссылку выше или выберите другой релиз.
+              </div>
+            )}
+          </div>
         </section>
       </div>
     </div>

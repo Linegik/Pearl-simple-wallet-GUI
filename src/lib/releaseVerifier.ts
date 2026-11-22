@@ -79,12 +79,23 @@ export function normalizeAssetDigest(digest: string | null): string | null {
   return /^[a-f0-9]{64}$/.test(cleaned) ? cleaned : null;
 }
 
-export type DesktopTargetPlatform = 'windows' | 'linux';
+export type DesktopTargetPlatform = 'windows' | 'ubuntu' | 'linux';
 
 const GITHUB_REPO_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\/[a-zA-Z0-9._-]{1,100}$/;
 
 export function isValidGithubRepoSlug(slug: string): boolean {
   return GITHUB_REPO_REGEX.test(slug.trim());
+}
+
+export function isSafeHttpsUrl(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export function selectReleaseAssetForPlatform(
@@ -104,17 +115,112 @@ export function selectReleaseAssetForPlatform(
       null
     );
   }
+  if (platform === 'ubuntu') {
+    return (
+      release.assets.find((a) => a.name.endsWith('.deb')) ??
+      release.assets.find(
+        (a) => a.name.toLowerCase().includes('linux') && a.name.includes('amd64') && a.name.endsWith('.tar.gz'),
+      ) ??
+      null
+    );
+  }
   return (
     release.assets.find((a) => a.name.endsWith('.AppImage')) ??
-    release.assets.find((a) => a.name.endsWith('.deb')) ??
     release.assets.find(
       (a) => a.name.toLowerCase().includes('linux') && a.name.includes('amd64') && a.name.endsWith('.tar.gz'),
     ) ??
     release.assets.find(
       (a) => a.name.toLowerCase().includes('linux') && a.name.endsWith('.tar.gz'),
     ) ??
+    release.assets.find((a) => a.name.endsWith('.deb')) ??
     null
   );
+}
+
+export function buildOneLineInstallCommand(
+  platform: DesktopTargetPlatform,
+  downloadUrl: string,
+  filename?: string,
+): string {
+  const safeUrl = isSafeHttpsUrl(downloadUrl)
+    ? downloadUrl.trim()
+    : 'https://github.com/pearl-research-labs/pearl/releases';
+  const derivedName =
+    filename?.trim() ||
+    safeUrl.split('/').pop()?.split('?')[0] ||
+    (platform === 'windows'
+      ? 'Pearl-Vault-Setup.exe'
+      : platform === 'ubuntu'
+        ? 'pearl-vault_amd64.deb'
+        : 'Pearl-Vault-linux-x64.AppImage');
+
+  if (platform === 'windows') {
+    if (derivedName.endsWith('.zip')) {
+      return `irm "${safeUrl}" -OutFile "${derivedName}"; Expand-Archive ".\\${derivedName}" -DestinationPath .\\pearl-vault -Force; explorer .\\pearl-vault`;
+    }
+    return `irm "${safeUrl}" -OutFile "${derivedName}"; Start-Process ".\\${derivedName}"`;
+  }
+
+  if (derivedName.endsWith('.deb')) {
+    return `curl -fLO "${safeUrl}" && sudo apt install -y "./${derivedName}" && pearl-vault`;
+  }
+
+  if (derivedName.endsWith('.tar.gz') || derivedName.endsWith('.tgz')) {
+    return `mkdir -p pearl-vault && curl -fLO "${safeUrl}" && tar -xzf "${derivedName}" -C pearl-vault && cd pearl-vault && ls -la`;
+  }
+
+  return `curl -fLO "${safeUrl}" && chmod +x "./${derivedName}" && "./${derivedName}"`;
+}
+
+export function buildReleaseNotesMarkdown(params: {
+  repoSlug: string;
+  tag: string;
+  windowsUrl?: string;
+  ubuntuUrl?: string;
+  linuxUrl?: string;
+}): string {
+  const safeRepo = isValidGithubRepoSlug(params.repoSlug)
+    ? params.repoSlug.trim()
+    : 'your-org/pearl-vault';
+  const safeTag = /^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(params.tag.trim())
+    ? params.tag.trim()
+    : 'v1.0.0';
+  const ver = safeTag.replace(/^v/i, '');
+
+  const winUrl = isSafeHttpsUrl(params.windowsUrl ?? '')
+    ? params.windowsUrl!.trim()
+    : `https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${ver}-win-x64.exe`;
+  const ubuUrl = isSafeHttpsUrl(params.ubuntuUrl ?? '')
+    ? params.ubuntuUrl!.trim()
+    : `https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${ver}-linux-x64.deb`;
+  const linUrl = isSafeHttpsUrl(params.linuxUrl ?? '')
+    ? params.linuxUrl!.trim()
+    : `https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${ver}-linux-x64.AppImage`;
+
+  return [
+    `## Pearl Vault ${safeTag} — Скачать установщики`,
+    '',
+    `- **Windows (x64 .exe)**: [Скачать установщик Windows](${winUrl})`,
+    `- **Ubuntu / Debian (.deb)**: [Скачать пакет для Ubuntu](${ubuUrl})`,
+    `- **Linux (AppImage)**: [Скачать универсальный AppImage для Linux](${linUrl})`,
+    '',
+    '### Легкий запуск в одну команду',
+    '',
+    '**Ubuntu / Debian:**',
+    '```bash',
+    buildOneLineInstallCommand('ubuntu', ubuUrl),
+    '```',
+    '',
+    '**Linux (AppImage):**',
+    '```bash',
+    buildOneLineInstallCommand('linux', linUrl),
+    '```',
+    '',
+    '**Windows (PowerShell):**',
+    '```powershell',
+    buildOneLineInstallCommand('windows', winUrl),
+    '```',
+  ].join('\n');
 }
 
 export function verifyAssetAgainstChecksums(

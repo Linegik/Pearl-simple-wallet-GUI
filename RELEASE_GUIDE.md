@@ -23,6 +23,20 @@ git push origin v1.0.0
 4. Создаст `checksums.txt` (SHA-256) и (при наличии секрета `RELEASE_SIGNING_PRIVATE_KEY`) цифровую подпись `checksums.txt.sig`.
 5. Опубликует готовые файлы в разделе **Releases** вашего репозитория GitHub.
 
-## 3. Локальная сборка без GitHub Actions
+## 3. Запуск в одну команду после скачивания релиза
+- **Ubuntu / Debian (`.deb`)**:
+  ```bash
+  curl -fLO https://github.com/<ВАШ_ЛОГИН>/pearl-vault/releases/download/v1.0.0/Pearl-Vault-1.0.0-linux-x64.deb && sudo apt install -y ./Pearl-Vault-1.0.0-linux-x64.deb && pearl-vault
+  ```
+- **Linux (`.AppImage`)**:
+  ```bash
+  curl -fLO https://github.com/<ВАШ_ЛОГИН>/pearl-vault/releases/download/v1.0.0/Pearl-Vault-1.0.0-linux-x64.AppImage && chmod +x ./Pearl-Vault-1.0.0-linux-x64.AppImage && ./Pearl-Vault-1.0.0-linux-x64.AppImage
+  ```
+- **Windows (PowerShell)**:
+  ```powershell
+  irm https://github.com/<ВАШ_ЛОГИН>/pearl-vault/releases/download/v1.0.0/Pearl-Vault-1.0.0-win-x64.exe -OutFile Pearl-Vault-Setup.exe; Start-Process .\Pearl-Vault-Setup.exe
+  ```
+
+## 4. Локальная сборка без GitHub Actions
 - **Windows (PowerShell)**: `./build-windows.ps1`
 - **Linux (Bash)**: `chmod +x build-linux.sh && ./build-linux.sh`

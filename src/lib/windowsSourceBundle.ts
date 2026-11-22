@@ -18,7 +18,7 @@ export function buildGitPublishCommands(repoSlug: string, tag: string): string {
   return [
     'git init',
     'git add .',
-    'git commit -m "feat: Pearl Vault desktop wallet for Windows and Linux"',
+    'git commit -m "feat: Pearl Vault Windows and Linux"',
     'git branch -M main',
     `git remote add origin https://github.com/${safeRepo}.git`,
     'git push -u origin main',
@@ -120,6 +120,21 @@ jobs:
           tag_name: \${{ github.ref_name }}
           name: Pearl Vault \${{ github.ref_name }}
           generate_release_notes: true
+          body: |
+            ## Скачать установщики (Windows, Ubuntu, Linux)
+            - **Ubuntu / Debian (.deb)**: \`Pearl-Vault-${versionNoV}-linux-x64.deb\`
+            - **Linux (.AppImage)**: \`Pearl-Vault-${versionNoV}-linux-x64.AppImage\`
+            - **Windows (.exe)**: \`Pearl-Vault-${versionNoV}-win-x64.exe\`
+
+            ### Запуск в одну команду
+            **Ubuntu / Debian:**
+            \`\`\`bash
+            curl -fLO "https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${versionNoV}-linux-x64.deb" && sudo apt install -y "./Pearl-Vault-${versionNoV}-linux-x64.deb" && pearl-vault
+            \`\`\`
+            **Linux (AppImage):**
+            \`\`\`bash
+            curl -fLO "https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${versionNoV}-linux-x64.AppImage" && chmod +x "./Pearl-Vault-${versionNoV}-linux-x64.AppImage" && "./Pearl-Vault-${versionNoV}-linux-x64.AppImage"
+            \`\`\`
           files: artifacts/*
 `,
     },

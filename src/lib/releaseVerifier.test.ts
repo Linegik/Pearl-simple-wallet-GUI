@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildOneLineInstallCommand,
+  buildReleaseNotesMarkdown,
   compareSemver,
   createSignedReleaseManifest,
   GitHubRelease,
+  isSafeHttpsUrl,
   isUpdateAvailable,
   isValidGithubRepoSlug,
   parseChecksumsTxt,
@@ -93,7 +96,7 @@ test('Release digital signature verifier accepts valid signed manifest and rejec
   assert.equal(tamperedSigReport.signatureVerified, false);
 });
 
-test('Platform asset selector and GitHub release kit generator support Windows and Linux targets', () => {
+test('Platform asset selector, one-line commands, and release notes support Windows, Ubuntu, and Linux', () => {
   const sampleRelease: GitHubRelease = {
     id: 1,
     tag_name: 'v1.0.0',
@@ -111,6 +114,13 @@ test('Platform asset selector and GitHub release kit generator support Windows a
         content_type: 'application/octet-stream',
       },
       {
+        name: 'Pearl-Vault-1.0.0-linux-x64.deb',
+        size: 48_000_000,
+        browser_download_url: 'https://example.com/ubuntu.deb',
+        digest: null,
+        content_type: 'application/vnd.debian.binary-package',
+      },
+      {
         name: 'Pearl-Vault-1.0.0-linux-x64.AppImage',
         size: 52_000_000,
         browser_download_url: 'https://example.com/linux.AppImage',
@@ -125,9 +135,32 @@ test('Platform asset selector and GitHub release kit generator support Windows a
     'Pearl-Vault-1.0.0-win-x64.exe',
   );
   assert.equal(
+    selectReleaseAssetForPlatform(sampleRelease, 'ubuntu')?.name,
+    'Pearl-Vault-1.0.0-linux-x64.deb',
+  );
+  assert.equal(
     selectReleaseAssetForPlatform(sampleRelease, 'linux')?.name,
     'Pearl-Vault-1.0.0-linux-x64.AppImage',
   );
+
+  assert.equal(isSafeHttpsUrl('https://github.com/acme/pearl/releases'), true);
+  assert.equal(isSafeHttpsUrl('javascript:alert(1)'), false);
+
+  const ubuntuCmd = buildOneLineInstallCommand(
+    'ubuntu',
+    'https://github.com/acme/pearl/releases/download/v1.0.0/Pearl-Vault-1.0.0-linux-x64.deb',
+  );
+  assert.match(ubuntuCmd, /sudo apt install -y/);
+
+  const linuxCmd = buildOneLineInstallCommand(
+    'linux',
+    'https://github.com/acme/pearl/releases/download/v1.0.0/Pearl-Vault-1.0.0-linux-x64.AppImage',
+  );
+  assert.match(linuxCmd, /chmod \+x/);
+
+  const md = buildReleaseNotesMarkdown({ repoSlug: 'acme/pearl-vault', tag: 'v1.0.0' });
+  assert.match(md, /Ubuntu \/ Debian/);
+  assert.match(md, /AppImage/);
 
   assert.equal(isValidGithubRepoSlug('acme/pearl-vault'), true);
   assert.equal(isValidGithubRepoSlug('https://evil.com/foo'), false);

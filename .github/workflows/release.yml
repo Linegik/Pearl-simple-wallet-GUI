@@ -111,4 +111,27 @@ jobs:
           tag_name: ${{ github.ref_name || inputs.tag }}
           name: Pearl Vault ${{ github.ref_name || inputs.tag }}
           generate_release_notes: true
+          body: |
+            ## Скачать установщики (Windows, Ubuntu, Linux)
+
+            - **Windows (x64)**: скачайте `.exe` установщик или `.zip` из списка Assets ниже
+            - **Ubuntu / Debian (x64)**: скачайте `.deb` пакет
+            - **Linux (универсальный)**: скачайте `.AppImage` или `.tar.gz`
+
+            ### Запуск в одну команду
+
+            **Ubuntu / Debian (`.deb`):**
+            ```bash
+            TAG="${{ github.ref_name || inputs.tag }}" && VER="${TAG#v}" && curl -fLO "https://github.com/${{ github.repository }}/releases/download/${TAG}/Pearl-Vault-${VER}-linux-x64.deb" && sudo apt install -y "./Pearl-Vault-${VER}-linux-x64.deb" && pearl-vault
+            ```
+
+            **Linux (`.AppImage`):**
+            ```bash
+            TAG="${{ github.ref_name || inputs.tag }}" && VER="${TAG#v}" && curl -fLO "https://github.com/${{ github.repository }}/releases/download/${TAG}/Pearl-Vault-${VER}-linux-x64.AppImage" && chmod +x "./Pearl-Vault-${VER}-linux-x64.AppImage" && "./Pearl-Vault-${VER}-linux-x64.AppImage"
+            ```
+
+            **Windows (PowerShell):**
+            ```powershell
+            $TAG="${{ github.ref_name || inputs.tag }}"; $VER=$TAG.TrimStart('v'); irm "https://github.com/${{ github.repository }}/releases/download/$TAG/Pearl-Vault-$VER-win-x64.exe" -OutFile "Pearl-Vault-Setup.exe"; Start-Process ".\Pearl-Vault-Setup.exe"
+            ```
           files: artifacts/*

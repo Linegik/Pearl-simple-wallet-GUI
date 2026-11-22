@@ -5,12 +5,19 @@ const STORAGE_KEY_WALLETS = 'pearl_vault_wallets_v1';
 const STORAGE_KEY_TXS = 'pearl_vault_transactions_v1';
 const STORAGE_KEY_SETTINGS = 'pearl_vault_settings_v1';
 
+export interface CustomInstallerLinks {
+  windowsUrl: string;
+  ubuntuUrl: string;
+  linuxUrl: string;
+}
+
 export interface UpdaterSettings {
   autoCheckEnabled: boolean;
   includePrerelease: boolean;
   requireSignature: boolean;
   installedVersion: string;
   lastCheckedAt: string | null;
+  customInstallerLinks?: CustomInstallerLinks;
 }
 
 export const DEFAULT_UPDATER_SETTINGS: UpdaterSettings = {
@@ -19,6 +26,11 @@ export const DEFAULT_UPDATER_SETTINGS: UpdaterSettings = {
   requireSignature: true,
   installedVersion: 'v1.5.5',
   lastCheckedAt: null,
+  customInstallerLinks: {
+    windowsUrl: '',
+    ubuntuUrl: '',
+    linuxUrl: '',
+  },
 };
 
 function makeSeededWallet(

@@ -1,16 +1,53 @@
 import { useMemo, useState } from 'react';
 import JSZip from 'jszip';
-import { Check, Copy, Download, FileCode2, GitBranch, Package } from 'lucide-react';
-import { isValidGithubRepoSlug } from '../lib/releaseVerifier';
+import {
+  Check,
+  Copy,
+  Download,
+  FileCode2,
+  GitBranch,
+  Link2,
+  Package,
+  Terminal,
+} from 'lucide-react';
+import {
+  buildOneLineInstallCommand,
+  buildReleaseNotesMarkdown,
+  isSafeHttpsUrl,
+  isValidGithubRepoSlug,
+} from '../lib/releaseVerifier';
 import { buildGitPublishCommands, buildReleaseKitFiles } from '../lib/windowsSourceBundle';
 
 export function WindowsSourceView() {
   const [repoSlug, setRepoSlug] = useState('your-org/pearl-vault');
   const [releaseTag, setReleaseTag] = useState('v1.0.0');
+  const [ubuntuUrl, setUbuntuUrl] = useState('');
+  const [linuxUrl, setLinuxUrl] = useState('');
+  const [windowsUrl, setWindowsUrl] = useState('');
   const [selectedPath, setSelectedPath] = useState('.github/workflows/release.yml');
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedGit, setCopiedGit] = useState(false);
+  const [copiedNotes, setCopiedNotes] = useState(false);
+  const [copiedOsCmd, setCopiedOsCmd] = useState<string | null>(null);
   const [downloadingZip, setDownloadingZip] = useState(false);
+
+  const safeRepo = isValidGithubRepoSlug(repoSlug)
+    ? repoSlug.trim()
+    : 'your-org/pearl-vault';
+  const safeTag = /^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(releaseTag.trim())
+    ? releaseTag.trim()
+    : 'v1.0.0';
+  const versionClean = safeTag.replace(/^v/i, '');
+
+  const resolvedUbuntuUrl = isSafeHttpsUrl(ubuntuUrl)
+    ? ubuntuUrl.trim()
+    : `https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${versionClean}-linux-x64.deb`;
+  const resolvedLinuxUrl = isSafeHttpsUrl(linuxUrl)
+    ? linuxUrl.trim()
+    : `https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${versionClean}-linux-x64.AppImage`;
+  const resolvedWindowsUrl = isSafeHttpsUrl(windowsUrl)
+    ? windowsUrl.trim()
+    : `https://github.com/${safeRepo}/releases/download/${safeTag}/Pearl-Vault-${versionClean}-win-x64.exe`;
 
   const files = useMemo(
     () => buildReleaseKitFiles(repoSlug, releaseTag),
@@ -20,25 +57,49 @@ export function WindowsSourceView() {
     () => buildGitPublishCommands(repoSlug, releaseTag),
     [repoSlug, releaseTag],
   );
+  const releaseNotesMd = useMemo(
+    () =>
+      buildReleaseNotesMarkdown({
+        repoSlug,
+        tag: releaseTag,
+        windowsUrl: resolvedWindowsUrl,
+        ubuntuUrl: resolvedUbuntuUrl,
+        linuxUrl: resolvedLinuxUrl,
+      }),
+    [repoSlug, releaseTag, resolvedWindowsUrl, resolvedUbuntuUrl, resolvedLinuxUrl],
+  );
+
+  const oneLineCommands = useMemo(
+    () => [
+      {
+        id: 'ubuntu',
+        title: 'Ubuntu / Debian (.deb) — запуск в 1 команду',
+        cmd: buildOneLineInstallCommand('ubuntu', resolvedUbuntuUrl),
+        href: resolvedUbuntuUrl,
+      },
+      {
+        id: 'linux',
+        title: 'Linux (.AppImage) — запуск в 1 команду',
+        cmd: buildOneLineInstallCommand('linux', resolvedLinuxUrl),
+        href: resolvedLinuxUrl,
+      },
+      {
+        id: 'windows',
+        title: 'Windows (PowerShell .exe) — запуск в 1 команду',
+        cmd: buildOneLineInstallCommand('windows', resolvedWindowsUrl),
+        href: resolvedWindowsUrl,
+      },
+    ],
+    [resolvedUbuntuUrl, resolvedLinuxUrl, resolvedWindowsUrl],
+  );
+
   const activeFile = files.find((f) => f.path === selectedPath) ?? files[0];
-  const versionClean = releaseTag.trim().replace(/^v/i, '') || '1.0.0';
   const repoValid = isValidGithubRepoSlug(repoSlug);
 
-  const handleCopyCode = async () => {
+  const copyText = async (text: string, onDone: () => void) => {
     try {
-      await navigator.clipboard.writeText(activeFile.content);
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2500);
-    } catch {
-      // Ignore clipboard failure in headless mode
-    }
-  };
-
-  const handleCopyGit = async () => {
-    try {
-      await navigator.clipboard.writeText(gitCommands);
-      setCopiedGit(true);
-      setTimeout(() => setCopiedGit(false), 2500);
+      await navigator.clipboard.writeText(text);
+      onDone();
     } catch {
       // Ignore clipboard failure in headless mode
     }
@@ -51,11 +112,12 @@ export function WindowsSourceView() {
       for (const file of files) {
         zip.file(file.path, file.content);
       }
+      zip.file('RELEASE_NOTES.md', releaseNotesMd);
       const blob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `pearl-vault-github-win-linux-${releaseTag}.zip`;
+      a.download = `pearl-vault-github-win-linux-${safeTag}.zip`;
       a.click();
       URL.revokeObjectURL(url);
     } finally {
@@ -68,11 +130,10 @@ export function WindowsSourceView() {
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div className="min-w-0">
           <h1 className="font-display text-2xl font-bold text-slate-900">
-            Выгрузка на GitHub и первый релиз (Windows & Linux)
+            Выгрузка на GitHub и первый релиз (Windows, Ubuntu, Linux)
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Готовый CI/CD конвейер GitHub Actions, сборка установщиков Windows (.exe) и пакетов
-            Linux (.AppImage, .deb, .tar.gz).
+            CI/CD конвейер, прямые ссылки для скачивания установщиков и команды запуска в 1 строку.
           </p>
         </div>
 
@@ -134,8 +195,56 @@ export function WindowsSourceView() {
 
           <div className="space-y-2 border-t border-slate-200 pt-3">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-900">
+              <Link2 className="h-4 w-4 text-slate-700" aria-hidden="true" />
+              <span>Свои ссылки на установщики (необязательно — иначе берутся из GitHub Releases):</span>
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div>
+                <label htmlFor="kit-ubuntu-url" className="mb-1 block text-[11px] font-medium text-slate-600">
+                  Ubuntu (.deb) URL
+                </label>
+                <input
+                  id="kit-ubuntu-url"
+                  type="url"
+                  value={ubuntuUrl}
+                  onChange={(e) => setUbuntuUrl(e.target.value)}
+                  placeholder="https://.../pearl.deb"
+                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label htmlFor="kit-linux-url" className="mb-1 block text-[11px] font-medium text-slate-600">
+                  Linux (.AppImage) URL
+                </label>
+                <input
+                  id="kit-linux-url"
+                  type="url"
+                  value={linuxUrl}
+                  onChange={(e) => setLinuxUrl(e.target.value)}
+                  placeholder="https://.../Pearl.AppImage"
+                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label htmlFor="kit-win-url" className="mb-1 block text-[11px] font-medium text-slate-600">
+                  Windows (.exe) URL
+                </label>
+                <input
+                  id="kit-win-url"
+                  type="url"
+                  value={windowsUrl}
+                  onChange={(e) => setWindowsUrl(e.target.value)}
+                  placeholder="https://.../Pearl.exe"
+                  className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2 border-t border-slate-200 pt-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-900">
               <Package className="h-4 w-4 text-slate-700" aria-hidden="true" />
-              <span>Что соберет GitHub Actions после push тега {releaseTag}:</span>
+              <span>Что соберет GitHub Actions после push тега {safeTag}:</span>
             </div>
             <div className="grid grid-cols-1 gap-2 font-mono text-xs text-slate-700 sm:grid-cols-2">
               <div>
@@ -144,9 +253,9 @@ export function WindowsSourceView() {
                 <div>· Portable .exe + .zip</div>
               </div>
               <div>
-                <div className="font-sans font-semibold text-slate-900">Linux (x64)</div>
+                <div className="font-sans font-semibold text-slate-900">Ubuntu & Linux (x64)</div>
+                <div>· Pearl-Vault-{versionClean}-linux-x64.deb</div>
                 <div>· Pearl-Vault-{versionClean}-linux-x64.AppImage</div>
-                <div>· .deb (Ubuntu/Debian) + .tar.gz</div>
               </div>
             </div>
           </div>
@@ -159,7 +268,12 @@ export function WindowsSourceView() {
             </span>
             <button
               type="button"
-              onClick={handleCopyGit}
+              onClick={() =>
+                copyText(gitCommands, () => {
+                  setCopiedGit(true);
+                  setTimeout(() => setCopiedGit(false), 2500);
+                })
+              }
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50"
             >
               {copiedGit ? (
@@ -178,11 +292,78 @@ export function WindowsSourceView() {
           <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-950 p-4 font-mono text-xs leading-relaxed text-slate-100">
             <code>{gitCommands}</code>
           </pre>
-          <p className="mt-2 text-xs text-slate-600">
-            Все файлы CI/CD и конфигурации (<code className="font-mono">.github/workflows/release.yml</code>,{' '}
-            <code className="font-mono">electron-builder.yml</code>, скрипты сборки) уже
-            добавлены в проект.
-          </p>
+
+          <div className="mt-4 border-t border-slate-200 pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-slate-900">
+                Описание релиза (Markdown с прямыми ссылками для Ubuntu/Linux/Windows)
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  copyText(releaseNotesMd, () => {
+                    setCopiedNotes(true);
+                    setTimeout(() => setCopiedNotes(false), 2500);
+                  })
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+              >
+                {copiedNotes ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-700" aria-hidden="true" />
+                    <span>Markdown скопирован</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Копировать Markdown</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* One-Command Launch Instructions for Ubuntu, Linux, Windows */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+          <Terminal className="h-4 w-4 text-blue-700" aria-hidden="true" />
+          <span>3. Легкая инструкция запуска в одну команду (Ubuntu, Linux, Windows)</span>
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {oneLineCommands.map((item) => (
+            <div key={item.id} className="flex flex-col justify-between space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-800">{item.title}</span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <a
+                    href={item.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-800 hover:bg-slate-50"
+                  >
+                    Ссылка
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyText(item.cmd, () => {
+                        setCopiedOsCmd(item.id);
+                        setTimeout(() => setCopiedOsCmd(null), 2500);
+                      })
+                    }
+                    className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-800 hover:bg-slate-50"
+                  >
+                    {copiedOsCmd === item.id ? 'Скопировано' : 'Копировать'}
+                  </button>
+                </div>
+              </div>
+              <pre className="whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100">
+                <code>{item.cmd}</code>
+              </pre>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -225,7 +406,12 @@ export function WindowsSourceView() {
             </span>
             <button
               type="button"
-              onClick={handleCopyCode}
+              onClick={() =>
+                copyText(activeFile.content, () => {
+                  setCopiedCode(true);
+                  setTimeout(() => setCopiedCode(false), 2500);
+                })
+              }
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50"
             >
               {copiedCode ? (
