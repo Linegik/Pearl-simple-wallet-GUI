@@ -31,7 +31,7 @@ const NAV_ITEMS: Array<{
   { id: 'cold-storage', label: 'Холодное хранение', icon: HardDrive },
   { id: 'security', label: 'Ключи и безопасность', icon: ShieldCheck },
   { id: 'updater', label: 'Обновления GitHub', icon: DownloadCloud },
-  { id: 'source', label: 'Исходный код Windows', icon: Code2 },
+  { id: 'source', label: 'Релиз Win / Linux', icon: Code2 },
 ];
 
 export function SidebarNav({
@@ -64,7 +64,7 @@ export function SidebarNav({
             Pearl Vault
           </span>
         </div>
-        <span className="font-mono text-xs text-slate-500 tabular-nums">win64</span>
+        <span className="font-mono text-xs text-slate-500 tabular-nums">win · linux</span>
       </div>
 
       <div className="border-b border-slate-200 px-4 py-3.5">

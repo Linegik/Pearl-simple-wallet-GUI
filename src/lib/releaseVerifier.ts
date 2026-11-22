@@ -79,6 +79,44 @@ export function normalizeAssetDigest(digest: string | null): string | null {
   return /^[a-f0-9]{64}$/.test(cleaned) ? cleaned : null;
 }
 
+export type DesktopTargetPlatform = 'windows' | 'linux';
+
+const GITHUB_REPO_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\/[a-zA-Z0-9._-]{1,100}$/;
+
+export function isValidGithubRepoSlug(slug: string): boolean {
+  return GITHUB_REPO_REGEX.test(slug.trim());
+}
+
+export function selectReleaseAssetForPlatform(
+  release: GitHubRelease | null,
+  platform: DesktopTargetPlatform,
+): GitHubReleaseAsset | null {
+  if (!release) return null;
+  if (platform === 'windows') {
+    return (
+      release.assets.find(
+        (a) => a.name.toLowerCase().includes('setup') && a.name.endsWith('.exe'),
+      ) ??
+      release.assets.find((a) => a.name.endsWith('.exe')) ??
+      release.assets.find(
+        (a) => a.name.toLowerCase().includes('win') && a.name.endsWith('.zip'),
+      ) ??
+      null
+    );
+  }
+  return (
+    release.assets.find((a) => a.name.endsWith('.AppImage')) ??
+    release.assets.find((a) => a.name.endsWith('.deb')) ??
+    release.assets.find(
+      (a) => a.name.toLowerCase().includes('linux') && a.name.includes('amd64') && a.name.endsWith('.tar.gz'),
+    ) ??
+    release.assets.find(
+      (a) => a.name.toLowerCase().includes('linux') && a.name.endsWith('.tar.gz'),
+    ) ??
+    null
+  );
+}
+
 export function verifyAssetAgainstChecksums(
   asset: GitHubReleaseAsset,
   entries: ChecksumEntry[],

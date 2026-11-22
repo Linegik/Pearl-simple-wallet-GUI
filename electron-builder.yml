@@ -1,0 +1,48 @@
+appId: org.pearlresearch.vault
+productName: Pearl Vault
+copyright: Apache-2.0 Pearl Vault Contributors
+asar: true
+
+directories:
+  output: release-dist
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  artifactName: Pearl-Vault-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Pearl Vault
+
+linux:
+  category: Finance
+  maintainer: Pearl Vault Contributors
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+    - target: tar.gz
+      arch:
+        - x64
+  artifactName: Pearl-Vault-${version}-linux-${arch}.${ext}

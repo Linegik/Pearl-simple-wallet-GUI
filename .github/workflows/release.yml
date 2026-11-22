@@ -1,0 +1,114 @@
+name: Build & Release Pearl Vault (Windows & Linux)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Версия релиза (например v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Test, Lint & Web Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx tsx --test src/lib/*.test.ts
+      - run: npm run lint
+      - run: npm run build
+
+  build-desktop:
+    name: Build ${{ matrix.os_label }} Installer
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os_label: Windows (x64)
+            platform_flag: --win nsis portable --x64
+          - os: ubuntu-latest
+            os_label: Linux (x64)
+            platform_flag: --linux AppImage deb tar.gz --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install web dependencies & build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Electron & electron-builder
+        run: npm install --no-save electron@33.2.0 electron-builder@25.1.8
+
+      - name: Compile Electron TypeScript
+        run: |
+          npx tsc -p tsconfig.electron.json
+          node -e "require('fs').writeFileSync('dist-electron/package.json', JSON.stringify({ type: 'commonjs' }))"
+
+      - name: Package Desktop Installers
+        run: npx electron-builder ${{ matrix.platform_flag }} --publish never
+
+      - name: Upload built artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            release-dist/*.exe
+            release-dist/*.zip
+            release-dist/*.AppImage
+            release-dist/*.deb
+            release-dist/*.tar.gz
+
+  publish-release:
+    name: Sign Checksums & Publish GitHub Release
+    needs: build-desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums.txt
+        working-directory: artifacts
+        run: sha256sum * > checksums.txt
+
+      - name: Sign checksums.txt (if RELEASE_SIGNING_PRIVATE_KEY secret is set)
+        working-directory: artifacts
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$RELEASE_SIGNING_PRIVATE_KEY" ]; then
+            printf '%s' "$RELEASE_SIGNING_PRIVATE_KEY" > /tmp/release-key.pem
+            openssl pkeyutl -sign -inkey /tmp/release-key.pem -in checksums.txt -out checksums.txt.sig
+            rm -f /tmp/release-key.pem
+          else
+            echo "RELEASE_SIGNING_PRIVATE_KEY not configured; publishing SHA-256 checksums.txt."
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          name: Pearl Vault ${{ github.ref_name || inputs.tag }}
+          generate_release_notes: true
+          files: artifacts/*

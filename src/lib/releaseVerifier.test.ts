@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import {
   compareSemver,
   createSignedReleaseManifest,
+  GitHubRelease,
   isUpdateAvailable,
+  isValidGithubRepoSlug,
   parseChecksumsTxt,
+  selectReleaseAssetForPlatform,
   verifyAssetAgainstChecksums,
   verifyReleaseManifestSignature,
 } from './releaseVerifier';
+import { buildGitPublishCommands, buildReleaseKitFiles } from './windowsSourceBundle';
 
 test('Semver comparison detects newer Pearl GitHub releases accurately', () => {
   assert.equal(compareSemver('v1.5.7', 'v1.5.5'), 1);
@@ -87,4 +91,54 @@ test('Release digital signature verifier accepts valid signed manifest and rejec
   });
   assert.equal(tamperedSigReport.valid, false);
   assert.equal(tamperedSigReport.signatureVerified, false);
+});
+
+test('Platform asset selector and GitHub release kit generator support Windows and Linux targets', () => {
+  const sampleRelease: GitHubRelease = {
+    id: 1,
+    tag_name: 'v1.0.0',
+    name: 'v1.0.0',
+    prerelease: false,
+    published_at: '2026-11-21T00:00:00Z',
+    html_url: 'https://github.com/acme/pearl-vault/releases/tag/v1.0.0',
+    body: '',
+    assets: [
+      {
+        name: 'Pearl-Vault-1.0.0-win-x64.exe',
+        size: 50_000_000,
+        browser_download_url: 'https://example.com/win.exe',
+        digest: null,
+        content_type: 'application/octet-stream',
+      },
+      {
+        name: 'Pearl-Vault-1.0.0-linux-x64.AppImage',
+        size: 52_000_000,
+        browser_download_url: 'https://example.com/linux.AppImage',
+        digest: null,
+        content_type: 'application/octet-stream',
+      },
+    ],
+  };
+
+  assert.equal(
+    selectReleaseAssetForPlatform(sampleRelease, 'windows')?.name,
+    'Pearl-Vault-1.0.0-win-x64.exe',
+  );
+  assert.equal(
+    selectReleaseAssetForPlatform(sampleRelease, 'linux')?.name,
+    'Pearl-Vault-1.0.0-linux-x64.AppImage',
+  );
+
+  assert.equal(isValidGithubRepoSlug('acme/pearl-vault'), true);
+  assert.equal(isValidGithubRepoSlug('https://evil.com/foo'), false);
+
+  const commands = buildGitPublishCommands('acme/pearl-vault', 'v1.0.0');
+  assert.match(commands, /github\.com\/acme\/pearl-vault\.git/);
+  assert.match(commands, /git tag v1\.0\.0/);
+
+  const files = buildReleaseKitFiles('acme/pearl-vault', 'v1.0.0');
+  const workflow = files.find((f) => f.path === '.github/workflows/release.yml');
+  assert.ok(workflow);
+  assert.match(workflow.content, /--win nsis portable/);
+  assert.match(workflow.content, /--linux AppImage deb tar\.gz/);
 });

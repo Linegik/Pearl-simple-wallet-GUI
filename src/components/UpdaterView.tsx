@@ -11,10 +11,13 @@ import {
 } from 'lucide-react';
 import {
   createSignedReleaseManifest,
+  DesktopTargetPlatform,
   GitHubRelease,
   isUpdateAvailable,
+  isValidGithubRepoSlug,
   normalizeAssetDigest,
   parseChecksumsTxt,
+  selectReleaseAssetForPlatform,
   sha256Hex,
   SignatureVerificationReport,
   SignedReleaseManifest,
@@ -28,8 +31,10 @@ interface UpdaterViewProps {
   onUpdateSettings: (next: UpdaterSettings) => void;
   releases: GitHubRelease[];
   releaseSource: 'github_live' | 'cached_snapshot' | 'idle';
+  activeRepo: string;
+  repoError: string | null;
   isChecking: boolean;
-  onCheckReleases: (force?: boolean) => Promise<void>;
+  onCheckReleases: (force?: boolean, repo?: string) => Promise<void>;
 }
 
 export function UpdaterView({
@@ -37,9 +42,13 @@ export function UpdaterView({
   onUpdateSettings,
   releases,
   releaseSource,
+  activeRepo,
+  repoError,
   isChecking,
   onCheckReleases,
 }: UpdaterViewProps) {
+  const [targetPlatform, setTargetPlatform] = useState<DesktopTargetPlatform>('windows');
+  const [repoInput, setRepoInput] = useState(activeRepo);
   const [selectedTag, setSelectedTag] = useState<string>('');
   const [checksumRaw, setChecksumRaw] = useState<string | null>(null);
   const [checksumMatched, setChecksumMatched] = useState<boolean | null>(null);
@@ -57,9 +66,7 @@ export function UpdaterView({
   const activeRelease =
     filteredReleases.find((r) => r.tag_name === selectedTag) ?? latestRelease ?? null;
 
-  const windowsAsset = activeRelease?.assets.find(
-    (a) => a.name.toLowerCase().includes('windows') && a.name.endsWith('.zip'),
-  );
+  const targetAsset = selectReleaseAssetForPlatform(activeRelease, targetPlatform);
 
   const hasUpdate = latestRelease
     ? isUpdateAvailable(settings.installedVersion, latestRelease.tag_name)
@@ -71,12 +78,21 @@ export function UpdaterView({
     }
   }, [activeRelease, selectedTag]);
 
+  const handleRepoSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isValidGithubRepoSlug(repoInput)) return;
+    setSelectedTag('');
+    setSigReport(null);
+    setChecksumMatched(null);
+    void onCheckReleases(true, repoInput.trim());
+  };
+
   const runSignatureAndChecksumVerification = async (tamperMode: boolean) => {
-    if (!activeRelease || !windowsAsset) return;
+    if (!activeRelease || !targetAsset) return;
     setIsVerifying(true);
     try {
       const res = await fetch(
-        `/api/releases/checksums?tag=${encodeURIComponent(activeRelease.tag_name)}`,
+        `/api/releases/checksums?tag=${encodeURIComponent(activeRelease.tag_name)}&repo=${encodeURIComponent(activeRepo)}`,
       );
       if (!res.ok) {
         throw new Error('Не удалось загрузить checksums.txt для релиза.');
@@ -84,15 +100,15 @@ export function UpdaterView({
       const data = (await res.json()) as { raw: string };
       setChecksumRaw(data.raw);
       const entries = parseChecksumsTxt(data.raw);
-      const assetCheck = verifyAssetAgainstChecksums(windowsAsset, entries);
+      const assetCheck = verifyAssetAgainstChecksums(targetAsset, entries);
       setChecksumMatched(assetCheck.matched);
 
       const expectedSha =
-        assetCheck.checksumSha256 ?? normalizeAssetDigest(windowsAsset.digest) ?? '';
+        assetCheck.checksumSha256 ?? normalizeAssetDigest(targetAsset.digest) ?? '';
 
       const { manifest } = await createSignedReleaseManifest({
         tag: activeRelease.tag_name,
-        filename: windowsAsset.name,
+        filename: targetAsset.name,
         sha256: expectedSha,
       });
       setSignedManifest(manifest);
@@ -112,12 +128,12 @@ export function UpdaterView({
     }
   };
 
-  const handleLocalZipVerify = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLocalFileVerify = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !windowsAsset) return;
+    if (!file || !targetAsset) return;
     const buf = new Uint8Array(await file.arrayBuffer());
     const computed = await sha256Hex(buf);
-    const official = normalizeAssetDigest(windowsAsset.digest);
+    const official = normalizeAssetDigest(targetAsset.digest);
     setLocalFileResult({
       filename: file.name,
       sha256: computed,
@@ -135,35 +151,72 @@ export function UpdaterView({
           <p className="mt-1 text-sm text-slate-600">
             Репозиторий{' '}
             <a
-              href="https://github.com/pearl-research-labs/pearl/releases"
+              href={`https://github.com/${activeRepo}/releases`}
               target="_blank"
               rel="noopener noreferrer"
               className="font-mono font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900"
             >
-              pearl-research-labs/pearl
+              {activeRepo}
             </a>{' '}
-            · Проверка SHA-256 и цифровой подписи перед установкой.
+            · Сборки для Windows и Linux с проверкой SHA-256 и подписи.
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={isChecking}
-          onClick={() => onCheckReleases(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
-        >
-          <RefreshCw
-            className={`h-4 w-4 ${isChecking ? 'animate-spin' : ''}`}
-            aria-hidden="true"
-          />
-          <span>{isChecking ? 'Проверка GitHub...' : 'Проверить обновления'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center rounded-lg border border-slate-200 bg-white p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setTargetPlatform('windows');
+                setSigReport(null);
+                setChecksumMatched(null);
+              }}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                targetPlatform === 'windows'
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Windows (x64)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTargetPlatform('linux');
+                setSigReport(null);
+                setChecksumMatched(null);
+              }}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                targetPlatform === 'linux'
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Linux (x64)
+            </button>
+          </div>
+
+          <button
+            type="button"
+            disabled={isChecking}
+            onClick={() => onCheckReleases(true, activeRepo)}
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${isChecking ? 'animate-spin' : ''}`}
+              aria-hidden="true"
+            />
+            <span>{isChecking ? 'Проверка GitHub...' : 'Проверить обновления'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Auto-Update Policy & Current Version */}
+      {/* Auto-Update Policy & Repo Switcher */}
       <section className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-white p-5 lg:grid-cols-12">
         <div className="space-y-2 lg:col-span-6">
-          <div className="text-xs font-medium text-slate-500">Состояние клиента Windows</div>
+          <div className="text-xs font-medium text-slate-500">
+            Состояние клиента ({targetPlatform === 'windows' ? 'Windows x64' : 'Linux x64'})
+          </div>
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-mono text-lg font-bold text-slate-900 tabular-nums">
               Установлено: {settings.installedVersion}
@@ -197,6 +250,26 @@ export function UpdaterView({
         </div>
 
         <div className="flex flex-col justify-center gap-2.5 border-t border-slate-200 pt-4 lg:col-span-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
+          <form onSubmit={handleRepoSubmit} className="flex flex-wrap items-center gap-2">
+            <label htmlFor="github-repo-input" className="text-xs font-medium text-slate-700">
+              Репозиторий GitHub:
+            </label>
+            <input
+              id="github-repo-input"
+              type="text"
+              value={repoInput}
+              onChange={(e) => setRepoInput(e.target.value)}
+              placeholder="owner/repo"
+              className="min-w-[200px] flex-1 rounded-lg border border-slate-300 px-2.5 py-1 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none"
+            />
+            <button
+              type="submit"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+            >
+              Подключить
+            </button>
+          </form>
+
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-800">
               <input
@@ -207,7 +280,7 @@ export function UpdaterView({
                 }
                 className="h-4 w-4 rounded border-slate-300 text-blue-600"
               />
-              <span>Автоматически проверять обновления при запуске</span>
+              <span>Автопроверка при запуске</span>
             </label>
 
             <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-800">
@@ -219,38 +292,44 @@ export function UpdaterView({
                 }
                 className="h-4 w-4 rounded border-slate-300 text-blue-600"
               />
-              <span>Блокировать неподписанные сборки</span>
+              <span>Требовать цифровую подпись</span>
             </label>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-3 text-xs">
-            <label htmlFor="sim-installed-ver" className="text-slate-600">
-              Текущая версия клиента:
-            </label>
-            <select
-              id="sim-installed-ver"
-              value={settings.installedVersion}
-              onChange={(e) =>
-                onUpdateSettings({ ...settings, installedVersion: e.target.value })
-              }
-              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 font-mono text-xs text-slate-900"
-            >
-              <option value="v1.5.5">v1.5.5 (предыдущая)</option>
-              <option value="v1.5.7">v1.5.7 (актуальная)</option>
-            </select>
+            <div className="flex items-center gap-2 text-xs">
+              <label htmlFor="sim-installed-ver" className="text-slate-600">
+                Версия:
+              </label>
+              <select
+                id="sim-installed-ver"
+                value={settings.installedVersion}
+                onChange={(e) =>
+                  onUpdateSettings({ ...settings, installedVersion: e.target.value })
+                }
+                className="rounded-lg border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-900"
+              >
+                <option value="v1.5.5">v1.5.5</option>
+                <option value="v1.5.7">v1.5.7</option>
+              </select>
+            </div>
           </div>
         </div>
       </section>
+
+      {repoError ? (
+        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
+          {repoError}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
         {/* Left: Official GitHub Releases Table */}
         <section className="rounded-xl border border-slate-200 bg-white xl:col-span-6">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
             <h2 className="font-display text-sm font-semibold text-slate-900">
-              Официальные релизы Windows (x64)
+              Релизы для {targetPlatform === 'windows' ? 'Windows (x64)' : 'Linux (x64)'}
             </h2>
             <a
-              href="https://github.com/pearl-research-labs/pearl/releases"
+              href={`https://github.com/${activeRepo}/releases`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900"
@@ -262,7 +341,7 @@ export function UpdaterView({
 
           <div className="divide-y divide-slate-200">
             {filteredReleases.map((rel) => {
-              const win = rel.assets.find((a) => a.name.toLowerCase().includes('windows'));
+              const asset = selectReleaseAssetForPlatform(rel, targetPlatform);
               const isSelected = activeRelease?.tag_name === rel.tag_name;
               return (
                 <div
@@ -288,11 +367,15 @@ export function UpdaterView({
                         · {new Date(rel.published_at).toLocaleDateString('ru-RU')}
                       </span>
                     </div>
-                    {win ? (
+                    {asset ? (
                       <div className="mt-1 truncate font-mono text-xs text-slate-600 tabular-nums">
-                        {win.name} · {(win.size / (1024 * 1024)).toFixed(1)} МБ
+                        {asset.name} · {(asset.size / (1024 * 1024)).toFixed(1)} МБ
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="mt-1 text-xs text-slate-400">
+                        Пакет для выбранной ОС не найден
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
@@ -311,15 +394,15 @@ export function UpdaterView({
                     >
                       {isSelected ? 'Выбран' : 'Проверить'}
                     </button>
-                    {win ? (
+                    {asset ? (
                       <a
-                        href={win.browser_download_url}
+                        href={asset.browser_download_url}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
                       >
                         <Download className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>.zip</span>
+                        <span>Скачать</span>
                       </a>
                     ) : null}
                   </div>
@@ -339,12 +422,14 @@ export function UpdaterView({
             GitHub API и проверка цифровой подписи ECDSA-P256-SHA256.
           </p>
 
-          {activeRelease && windowsAsset ? (
+          {activeRelease && targetAsset ? (
             <div className="mt-4 space-y-4">
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5 font-mono text-xs">
-                <div className="text-slate-500">Файл Windows: {windowsAsset.name}</div>
+                <div className="text-slate-500">
+                  Пакет ({targetPlatform === 'windows' ? 'Windows' : 'Linux'}): {targetAsset.name}
+                </div>
                 <div className="mt-1 break-all text-slate-900">
-                  GitHub API SHA-256: {normalizeAssetDigest(windowsAsset.digest) ?? 'не указан'}
+                  GitHub API SHA-256: {normalizeAssetDigest(targetAsset.digest) ?? 'не указан'}
                 </div>
               </div>
 
@@ -441,12 +526,11 @@ export function UpdaterView({
                 </details>
               ) : null}
 
-              {/* Local Downloaded File Verifier */}
               <div className="border-t border-slate-200 pt-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-xs font-semibold text-slate-900">
-                      Локальная проверка скачанного файла Windows (.zip)
+                      Локальная проверка скачанного файла (.exe / .zip / .AppImage / .deb)
                     </div>
                     <p className="text-xs text-slate-600">
                       Хэш вычисляется локально на вашем ПК без загрузки файла в сеть.
@@ -454,10 +538,10 @@ export function UpdaterView({
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50">
                     <FileCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Выбрать файл .zip</span>
+                    <span>Выбрать пакет</span>
                     <input
                       type="file"
-                      onChange={handleLocalZipVerify}
+                      onChange={handleLocalFileVerify}
                       className="sr-only"
                     />
                   </label>
@@ -483,7 +567,9 @@ export function UpdaterView({
               </div>
             </div>
           ) : (
-            <div className="mt-4 text-sm text-slate-500">Загрузка списка релизов...</div>
+            <div className="mt-4 text-sm text-slate-500">
+              Загрузка или выбор пакета для {targetPlatform === 'windows' ? 'Windows' : 'Linux'}...
+            </div>
           )}
         </section>
       </div>

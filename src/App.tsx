@@ -37,22 +37,30 @@ export default function App() {
   const [createPresetNet, setCreatePresetNet] = useState<PearlNetworkId>('testnet');
 
   // GitHub Releases Auto-Update State
+  const [activeRepo, setActiveRepo] = useState('pearl-research-labs/pearl');
+  const [repoError, setRepoError] = useState<string | null>(null);
   const [releases, setReleases] = useState<GitHubRelease[]>([]);
   const [releaseSource, setReleaseSource] = useState<'github_live' | 'cached_snapshot' | 'idle'>(
     'idle',
   );
   const [isCheckingReleases, setIsCheckingReleases] = useState(false);
 
-  const checkReleases = useCallback(async (force = false) => {
+  const checkReleases = useCallback(async (force = false, targetRepo?: string) => {
+    const repoToUse = targetRepo ?? activeRepo;
     setIsCheckingReleases(true);
+    setRepoError(null);
     try {
-      const res = await fetch(`/api/releases${force ? '?refresh=1' : ''}`);
+      const res = await fetch(
+        `/api/releases?repo=${encodeURIComponent(repoToUse)}${force ? '&refresh=1' : ''}`,
+      );
       if (res.ok) {
         const data = (await res.json()) as {
+          repo: string;
           source: 'github_live' | 'cached_snapshot';
           fetchedAt: string;
           releases: GitHubRelease[];
         };
+        setActiveRepo(data.repo);
         setReleases(data.releases);
         setReleaseSource(data.source);
         setSettings((prev) => {
@@ -60,13 +68,16 @@ export default function App() {
           saveUpdaterSettings(next);
           return next;
         });
+      } else {
+        const errData = (await res.json()) as { error?: string };
+        setRepoError(errData.error ?? 'Ошибка получения релизов из GitHub API.');
       }
     } catch {
-      // Keep previous release state silently on offline check
+      setRepoError('Не удалось подключиться к GitHub API.');
     } finally {
       setIsCheckingReleases(false);
     }
-  }, []);
+  }, [activeRepo]);
 
   useEffect(() => {
     if (settings.autoCheckEnabled) {
@@ -276,6 +287,8 @@ export default function App() {
               }}
               releases={releases}
               releaseSource={releaseSource}
+              activeRepo={activeRepo}
+              repoError={repoError}
               isChecking={isCheckingReleases}
               onCheckReleases={checkReleases}
             />

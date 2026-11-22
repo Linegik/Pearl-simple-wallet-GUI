@@ -6,9 +6,19 @@ import { createServer as createViteServer } from 'vite';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const GITHUB_RELEASES_URL =
-  'https://api.github.com/repos/pearl-research-labs/pearl/releases?per_page=8';
+const DEFAULT_REPO = 'pearl-research-labs/pearl';
+const VALID_REPO_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\/[a-zA-Z0-9._-]{1,100}$/;
 const VALID_TAG_REGEX = /^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/;
+
+function resolveSafeRepo(rawRepo: unknown): string {
+  if (typeof rawRepo === 'string') {
+    const trimmed = rawRepo.trim();
+    if (VALID_REPO_REGEX.test(trimmed)) {
+      return trimmed;
+    }
+  }
+  return DEFAULT_REPO;
+}
 
 interface ReleaseAsset {
   name: string;
@@ -90,6 +100,14 @@ const FALLBACK_RELEASES: NormalizedRelease[] = [
         digest: 'sha256:9b13e1ff60a55d70d53f73104f0b81bdf84170104a01746b56b6b7590f657aa7',
         content_type: 'application/zip',
       },
+      {
+        name: 'pearl-linux-amd64-v1.5.5.tar.gz',
+        size: 50374488,
+        browser_download_url:
+          'https://github.com/pearl-research-labs/pearl/releases/download/v1.5.5/pearl-linux-amd64-v1.5.5.tar.gz',
+        digest: 'sha256:dfc545ec64b4109a86748ebd924469c2a744184a8e783673c9f862671769bd19',
+        content_type: 'application/gzip',
+      },
     ],
   },
 ];
@@ -103,11 +121,15 @@ const FALLBACK_CHECKSUMS: Record<string, string> = {
     '05dcf3a6d96f14409b0b4f5a5c6764ca60ef7b373b2f3e4b6827b4ec6a12a13e  pearl-windows-amd64-v1.5.7.zip',
   ].join('\n'),
   'v1.5.5': [
+    'dfc545ec64b4109a86748ebd924469c2a744184a8e783673c9f862671769bd19  pearl-linux-amd64-v1.5.5.tar.gz',
     '9b13e1ff60a55d70d53f73104f0b81bdf84170104a01746b56b6b7590f657aa7  pearl-windows-amd64-v1.5.5.zip',
   ].join('\n'),
 };
 
-let cachedReleases: { fetchedAt: number; source: string; releases: NormalizedRelease[] } | null = null;
+const releaseCache = new Map<
+  string,
+  { fetchedAt: number; source: string; releases: NormalizedRelease[] }
+>();
 const CACHE_TTL_MS = 60_000;
 
 async function startServer() {
@@ -115,29 +137,33 @@ async function startServer() {
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', repo: 'pearl-research-labs/pearl' });
+    res.json({ status: 'ok', repo: DEFAULT_REPO });
   });
 
   app.get('/api/releases', async (req, res) => {
+    const repo = resolveSafeRepo(req.query.repo);
     const forceRefresh = req.query.refresh === '1';
     const now = Date.now();
-    if (!forceRefresh && cachedReleases && now - cachedReleases.fetchedAt < CACHE_TTL_MS) {
+    const cached = releaseCache.get(repo);
+
+    if (!forceRefresh && cached && now - cached.fetchedAt < CACHE_TTL_MS) {
       res.json({
-        repo: 'pearl-research-labs/pearl',
-        source: cachedReleases.source,
-        fetchedAt: new Date(cachedReleases.fetchedAt).toISOString(),
-        releases: cachedReleases.releases,
+        repo,
+        source: cached.source,
+        fetchedAt: new Date(cached.fetchedAt).toISOString(),
+        releases: cached.releases,
       });
       return;
     }
 
+    const githubUrl = `https://api.github.com/repos/${repo}/releases?per_page=8`;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 7000);
-      const response = await fetch(GITHUB_RELEASES_URL, {
+      const response = await fetch(githubUrl, {
         headers: {
           Accept: 'application/vnd.github+json',
-          'User-Agent': 'Pearl-Vault-Windows-Updater/1.0',
+          'User-Agent': 'Pearl-Vault-Desktop-Updater/1.0',
         },
         signal: controller.signal,
       });
@@ -154,7 +180,7 @@ async function startServer() {
         name: String(r.name ?? r.tag_name ?? ''),
         prerelease: Boolean(r.prerelease),
         published_at: String(r.published_at ?? ''),
-        html_url: String(r.html_url ?? 'https://github.com/pearl-research-labs/pearl/releases'),
+        html_url: String(r.html_url ?? `https://github.com/${repo}/releases`),
         body: String(r.body ?? ''),
         assets: Array.isArray(r.assets)
           ? (r.assets as Array<Record<string, unknown>>).map((a) => ({
@@ -167,37 +193,44 @@ async function startServer() {
           : [],
       }));
 
-      cachedReleases = { fetchedAt: now, source: 'github_live', releases };
+      releaseCache.set(repo, { fetchedAt: now, source: 'github_live', releases });
       res.json({
-        repo: 'pearl-research-labs/pearl',
+        repo,
         source: 'github_live',
         fetchedAt: new Date(now).toISOString(),
         releases,
       });
     } catch {
-      res.json({
-        repo: 'pearl-research-labs/pearl',
-        source: 'cached_snapshot',
-        fetchedAt: new Date(now).toISOString(),
-        releases: FALLBACK_RELEASES,
-      });
+      if (repo === DEFAULT_REPO) {
+        res.json({
+          repo,
+          source: 'cached_snapshot',
+          fetchedAt: new Date(now).toISOString(),
+          releases: FALLBACK_RELEASES,
+        });
+      } else {
+        res.status(404).json({
+          error: `Не удалось получить релизы для ${repo}. Проверьте, что репозиторий публичный и опубликован хотя бы 1 релиз.`,
+        });
+      }
     }
   });
 
   app.get('/api/releases/checksums', async (req, res) => {
+    const repo = resolveSafeRepo(req.query.repo);
     const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : '';
     if (!VALID_TAG_REGEX.test(tag)) {
       res.status(400).json({ error: 'Invalid release tag format' });
       return;
     }
 
-    const targetUrl = `https://github.com/pearl-research-labs/pearl/releases/download/${encodeURIComponent(tag)}/checksums.txt`;
+    const targetUrl = `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}/checksums.txt`;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 7000);
       const response = await fetch(targetUrl, {
         headers: {
-          'User-Agent': 'Pearl-Vault-Windows-Updater/1.0',
+          'User-Agent': 'Pearl-Vault-Desktop-Updater/1.0',
         },
         signal: controller.signal,
       });
@@ -208,15 +241,17 @@ async function startServer() {
       }
       const rawText = await response.text();
       res.json({
+        repo,
         tag,
         source: 'github_live',
         url: targetUrl,
         raw: rawText,
       });
     } catch {
-      const fallback = FALLBACK_CHECKSUMS[tag];
+      const fallback = repo === DEFAULT_REPO ? FALLBACK_CHECKSUMS[tag] : undefined;
       if (fallback) {
         res.json({
+          repo,
           tag,
           source: 'cached_snapshot',
           url: targetUrl,
